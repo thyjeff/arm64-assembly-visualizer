@@ -160,6 +160,30 @@ export const App: React.FC = () => {
   const [buildErrors, setBuildErrors] = useState<string | null>(null);
   const [infoBanner, setInfoBanner] = useState<string | null>(null);
 
+  // ---- Theme (light / dark) ----
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    try {
+      return (localStorage.getItem('arm64_theme') as 'light' | 'dark') || 'light';
+    } catch {
+      return 'light';
+    }
+  });
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.add('theme-transition');
+    root.classList.toggle('dark', theme === 'dark');
+    try {
+      localStorage.setItem('arm64_theme', theme);
+    } catch {
+      // storage unavailable
+    }
+    const t = setTimeout(() => root.classList.remove('theme-transition'), 250);
+    return () => clearTimeout(t);
+  }, [theme]);
+
+  const GITHUB_URL = 'https://github.com/thyjeff/arm64-assembly-visualizer';
+
   // ---- Device connection / Demo Mode ----
   // deviceConnected === null  -> still checking
   // deviceConnected === true  -> live backend reachable (same-origin or remote URL)
@@ -546,31 +570,31 @@ export const App: React.FC = () => {
     : latestEvent;
 
   return (
-    <div className="flex flex-col h-screen bg-slate-50 text-slate-800 p-3 gap-3">
+    <div className="flex flex-col h-screen bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 p-3 gap-3 transition-colors">
       {/* Top Header */}
-      <header className="flex items-center justify-between px-4 py-2.5 bg-white border border-slate-200 rounded-xl shadow-xs">
+      <header className="flex items-center justify-between px-4 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xs">
         <div className="flex items-center gap-3">
           <div>
-            <h1 className="text-sm font-bold tracking-wide text-slate-900 leading-tight">
+            <h1 className="text-sm font-bold tracking-wide text-slate-900 dark:text-slate-50 leading-tight">
               ARM64 Architecture Visualizer
             </h1>
-            <p className="text-[11px] text-slate-500 font-normal">
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 font-normal">
               Raspberry Pi 5 (AArch64) + Arduino + Native GDB/MI Instruction Stepper
             </p>
           </div>
         </div>
 
-        <div className="text-xs font-mono text-slate-600 flex items-center gap-3">
+        <div className="text-xs font-mono text-slate-600 dark:text-slate-300 flex items-center gap-2.5">
           {/* Device connection badge / Connect Device button */}
           <button
             onClick={() => setConnectDialogOpen(true)}
             title="Click to connect a device backend or disconnect"
             className={`flex items-center gap-1.5 px-2 py-1 rounded-lg border font-semibold transition-all ${
               deviceConnected === null
-                ? 'bg-slate-100 border-slate-200 text-slate-500'
+                ? 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400'
                 : deviceConnected
-                ? 'bg-emerald-50 border-emerald-300 text-emerald-800 hover:bg-emerald-100'
-                : 'bg-amber-50 border-amber-300 text-amber-800 hover:bg-amber-100'
+                ? 'bg-emerald-50 dark:bg-emerald-500/10 border-emerald-300 dark:border-emerald-500/40 text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-500/20'
+                : 'bg-amber-50 dark:bg-amber-500/10 border-amber-300 dark:border-amber-500/40 text-amber-800 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-500/20'
             }`}
           >
             <span className={`w-2 h-2 rounded-full ${
@@ -586,9 +610,40 @@ export const App: React.FC = () => {
               ? `Connected: ${deviceInfo?.hostname || 'device'} (${deviceInfo?.arch || '?'})`
               : 'Demo Mode · No Device — Connect'}
           </button>
-          <span>Target: <strong className="text-sky-700 bg-sky-50 px-1.5 py-0.5 rounded border border-sky-200">AArch64 Linux</strong></span>
-          <span className="text-slate-300">|</span>
-          <span>Debugger: <strong className="text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-200">{deviceConnected ? 'GDB/MI' : 'Simulated'}</strong></span>
+          <span className="hidden xl:inline">Target: <strong className="text-sky-700 dark:text-sky-300 bg-sky-50 dark:bg-sky-500/10 px-1.5 py-0.5 rounded border border-sky-200 dark:border-sky-500/30">AArch64 Linux</strong></span>
+          <span className="text-slate-300 dark:text-slate-700">|</span>
+          <span className="hidden xl:inline">Debugger: <strong className="text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-500/10 px-1.5 py-0.5 rounded border border-indigo-200 dark:border-indigo-500/30">{deviceConnected ? 'GDB/MI' : 'Simulated'}</strong></span>
+
+          {/* GitHub repository button */}
+          <a
+            href={GITHUB_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="View source on GitHub"
+            className="flex items-center gap-1.5 px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-all"
+          >
+            <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
+            </svg>
+            <span className="hidden sm:inline font-semibold">GitHub</span>
+          </a>
+
+          {/* Theme toggle */}
+          <button
+            onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
+            title={theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme'}
+            className="w-8 h-8 flex items-center justify-center rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-amber-300 transition-all"
+          >
+            {theme === 'light' ? (
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20.354 15.354A9 9 0 0 1 8.646 3.646 9.003 9.003 0 0 0 12 21a9.003 9.003 0 0 0 8.354-5.646z"/>
+              </svg>
+            ) : (
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 18a6 6 0 1 0 0-12 6 6 0 0 0 0 12zM12 1v2m0 18v2M4.2 4.2l1.4 1.4m12.8 12.8 1.4 1.4M1 12h2m18 0h2M4.2 19.8l1.4-1.4M17.6 5.6l1.4-1.4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none"/>
+              </svg>
+            )}
+          </button>
         </div>
       </header>
 
@@ -612,12 +667,12 @@ export const App: React.FC = () => {
       {infoBanner && !buildErrors && (
         <div className={`px-3 py-2 rounded-xl text-xs font-medium flex items-center justify-between transition-all border ${
           buildState === 'done' || buildState === 'already_done'
-            ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+            ? 'bg-emerald-50 dark:bg-emerald-500/10 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-500/40'
             : buildState === 'building'
-            ? 'bg-sky-50 text-sky-800 border-sky-300'
+            ? 'bg-sky-50 dark:bg-sky-500/10 text-sky-800 dark:text-sky-300 border-sky-300 dark:border-sky-500/40'
             : buildState === 'modified'
-            ? 'bg-amber-50 text-amber-800 border-amber-300'
-            : 'bg-slate-100 text-slate-700 border-slate-200'
+            ? 'bg-amber-50 dark:bg-amber-500/10 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-500/40'
+            : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
         }`}>
           <div className="flex items-center gap-2">
             {buildState === 'building' && (
@@ -630,7 +685,7 @@ export const App: React.FC = () => {
           </div>
           <button
             onClick={() => setInfoBanner(null)}
-            className="text-[10px] text-slate-400 hover:text-slate-700 font-bold px-1"
+            className="text-[10px] text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 font-bold px-1"
           >
             ✕
           </button>
@@ -639,7 +694,7 @@ export const App: React.FC = () => {
 
       {/* Error banner if build failed */}
       {buildErrors && (
-        <div className="bg-rose-50 border border-rose-300 p-3 rounded-xl text-rose-800 text-xs font-mono whitespace-pre-wrap shadow-xs">
+        <div className="bg-rose-50 dark:bg-rose-500/10 border border-rose-300 dark:border-rose-500/40 p-3 rounded-xl text-rose-800 dark:text-rose-300 text-xs font-mono whitespace-pre-wrap shadow-xs">
           <strong>Build Diagnostics:</strong>
           <div className="mt-1">{buildErrors}</div>
         </div>

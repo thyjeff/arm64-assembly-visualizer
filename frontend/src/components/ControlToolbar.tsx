@@ -97,7 +97,7 @@ export const ControlToolbar: React.FC<Props> = ({
   };
 
   return (
-    <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-sm flex flex-wrap items-center justify-between gap-3">
+    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3 shadow-sm flex flex-wrap items-center justify-between gap-3">
       {/* Primary Execution Controls */}
       <div className="flex items-center gap-2 flex-wrap">
         <button
@@ -147,7 +147,7 @@ export const ControlToolbar: React.FC<Props> = ({
         <button
           onClick={onStop}
           disabled={!isDebugging}
-          className="px-3.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 disabled:opacity-40 text-xs font-semibold text-rose-700 border border-rose-200 transition-all active:scale-95"
+          className="px-3.5 py-1.5 rounded-lg bg-rose-50 dark:bg-rose-500/10 hover:bg-rose-100 dark:hover:bg-rose-500/20 disabled:opacity-40 text-xs font-semibold text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-500/40 transition-all active:scale-95"
         >
           Stop / Reset
         </button>
@@ -159,34 +159,34 @@ export const ControlToolbar: React.FC<Props> = ({
         <div
           className={`flex items-center gap-2 px-3 py-1 rounded-lg border text-xs font-mono transition-all ${
             demoMode
-              ? 'bg-slate-50 border-slate-200 text-slate-400 opacity-60'
+              ? 'bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700 text-slate-400 dark:text-slate-500 opacity-60'
               : ledState
-              ? 'bg-amber-50 border-amber-300 text-amber-900'
-              : 'bg-slate-50 border-slate-200 text-slate-600'
+              ? 'bg-amber-50 dark:bg-amber-500/10 border-amber-300 dark:border-amber-500/40 text-amber-900 dark:text-amber-300'
+              : 'bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400'
           }`}
           title={demoMode ? 'Demo Mode: no hardware connected' : 'External LED on BCM GPIO 17'}
         >
-          <span className="font-semibold">LED (BCM 17):</span>
+          <span className="font-semibold text-slate-500 dark:text-slate-400">LED (BCM 17):</span>
           <button
             onClick={() => onToggleLed(ledState ? 0 : 1)}
             disabled={demoMode}
             className={`w-3.5 h-3.5 rounded-full border transition-all ${
               demoMode
-                ? 'bg-slate-200 border-slate-300 cursor-not-allowed'
+                ? 'bg-slate-200 dark:bg-slate-700 border-slate-300 dark:border-slate-600 cursor-not-allowed'
                 : ledState
                 ? 'bg-amber-400 border-amber-500 shadow-sm shadow-amber-400'
-                : 'bg-slate-300 border-slate-400 hover:bg-slate-400'
+                : 'bg-slate-300 dark:bg-slate-600 border-slate-400 dark:border-slate-500 hover:bg-slate-400 dark:hover:bg-slate-500'
             }`}
             title={demoMode ? 'Disabled in Demo Mode (no hardware)' : 'Click to toggle LED manually'}
           />
-          <span className={ledState && !demoMode ? 'text-amber-800 font-bold' : 'text-slate-500'}>
+          <span className={ledState && !demoMode ? 'text-amber-800 dark:text-amber-300 font-bold' : 'text-slate-500 dark:text-slate-400'}>
             {demoMode ? 'N/A' : ledState ? 'ON' : 'OFF'}
           </span>
         </div>
 
         {/* State Badge */}
-        <div className="text-xs font-mono px-3 py-1 rounded-lg bg-slate-100 border border-slate-200 text-slate-700">
-          State: <span className="font-bold text-sky-700">{statusText}</span>
+        <div className="text-xs font-mono px-3 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300">
+          State: <span className="font-bold text-sky-700 dark:text-sky-400">{statusText}</span>
         </div>
       </div>
     </div>
