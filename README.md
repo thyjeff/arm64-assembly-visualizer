@@ -4,6 +4,18 @@ An educational **Computer Architecture demonstrator** that makes instruction exe
 
 > **Not an emulator.** Programs run natively on the Pi 5's Cortex-A76 cores; every register value shown comes from the real process via GDB/MI.
 
+![Portal screenshot](docs/screenshot.png)
+*The portal stepping through an arithmetic program — here in Demo Mode (no hardware attached): identical UI, simulated AArch64 in the browser.*
+
+## Demo Mode (runs without hardware)
+
+The header badge always shows the connection state:
+
+- 🟢 **Connected to Pi** — the portal talks to the real backend: GNU `as`/`ld` builds, GDB/MI instruction stepping, real process registers, Arduino LCD output.
+- 🟡 **Demo Mode · No Device** — when the Pi is unreachable, the portal automatically falls back to a built-in **AArch64 simulator** (`frontend/src/simulator/aarch64.ts`). Assemble → Start → Step → Run all work identically: registers, condition flags, ALU breakdown, and the execution timeline all update, with the badge showing `Debugger: Simulated`. Hardware controls (LED/LCD) are disabled and marked `N/A`.
+
+This makes the project presentable on any laptop — no Pi required for classroom demonstrations.
+
 ```text
                     WEB BROWSER (React + TypeScript)
        +--------------------------------------------------+

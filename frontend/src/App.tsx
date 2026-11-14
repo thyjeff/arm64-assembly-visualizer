@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { RegisterViewer } from './components/RegisterViewer';
 import { AssemblyEditor } from './components/AssemblyEditor';
 import { ControlToolbar, BuildState } from './components/ControlToolbar';
 import { AluVisualizer } from './components/AluVisualizer';
 import { ExecutionTimeline } from './components/ExecutionTimeline';
 import { RegisterSnapshot, StepEvent, RegisterDiff } from './types/debugger';
+import { AArch64Simulator } from './simulator/aarch64';
 
 const SAMPLE_ARITHMETIC = `// 01_arithmetic.s - Native AArch64 Arithmetic Demonstration
 .global _start
@@ -157,6 +158,48 @@ export const App: React.FC = () => {
   const [buildErrors, setBuildErrors] = useState<string | null>(null);
   const [infoBanner, setInfoBanner] = useState<string | null>(null);
 
+  // ---- Device connection / Demo Mode ----
+  // deviceConnected === null  -> still checking
+  // deviceConnected === true  -> live Raspberry Pi backend reachable
+  // deviceConnected === false -> Demo Mode (browser simulator)
+  const [deviceConnected, setDeviceConnected] = useState<boolean | null>(null);
+  const liveRef = useRef(false);
+  const simulatorRef = useRef<AArch64Simulator | null>(null);
+
+  const setLive = (v: boolean) => {
+    liveRef.current = v;
+    setDeviceConnected(v);
+  };
+
+  const switchToDemo = (reason: string) => {
+    if (!liveRef.current) return;
+    setLive(false);
+    setInfoBanner(reason + ' Switched to Demo Mode: the built-in AArch64 simulator will run your code.');
+  };
+
+  const getSim = (): AArch64Simulator => {
+    if (!simulatorRef.current) simulatorRef.current = new AArch64Simulator();
+    return simulatorRef.current;
+  };
+
+  // Probe the backend once on load (and whenever the page regains focus)
+  useEffect(() => {
+    const probe = async () => {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 2500);
+        const res = await fetch('/api/health', { signal: controller.signal });
+        clearTimeout(timer);
+        setLive(res.ok);
+      } catch {
+        setLive(false);
+      }
+    };
+    probe();
+    window.addEventListener('focus', probe);
+    return () => window.removeEventListener('focus', probe);
+  }, []);
+
   const handleCodeChange = (newCode: string) => {
     setCode(newCode);
     if ((buildState === 'done' || buildState === 'already_done') && newCode !== lastBuiltCode) {
@@ -179,8 +222,9 @@ export const App: React.FC = () => {
     handleStop();
   };
 
-  // WebSocket for real-time synchronization
+  // WebSocket for real-time synchronization (live mode only)
   useEffect(() => {
+    if (deviceConnected !== true) return;
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/ws/session`;
     let ws: WebSocket | null = null;
@@ -225,8 +269,26 @@ export const App: React.FC = () => {
 
     setBuildState('building');
     setBuildErrors(null);
-    setInfoBanner('Assembling & Linking: Generating native AArch64 ELF binary on Raspberry Pi 5...');
     setStatusText('Assembling...');
+
+    // ---- Demo Mode: simulate the build locally ----
+    if (!liveRef.current) {
+      const err = getSim().load(code);
+      if (err) {
+        setBuildErrors(err);
+        setBuildState('failed');
+        setInfoBanner('Demo build failed: the simulator could not parse this program.');
+        setStatusText('Build Failed');
+      } else {
+        setLastBuiltCode(code);
+        setBuildState('done');
+        setInfoBanner('Demo build complete! The simulator parsed your program. Click 2. Start Debugger to step through it.');
+        setStatusText('Built (Demo Mode)');
+      }
+      return;
+    }
+
+    setInfoBanner('Assembling & Linking: Generating native AArch64 ELF binary on Raspberry Pi 5...');
 
     try {
       const res = await fetch('/api/build', {
@@ -247,14 +309,33 @@ export const App: React.FC = () => {
         setStatusText('Built & Linked (Done)');
       }
     } catch (e: any) {
-      setBuildErrors(e.message);
-      setBuildState('failed');
-      setInfoBanner('Connection Error: Failed to reach backend on Raspberry Pi 5.');
-      setStatusText('Build Error');
+      switchToDemo('Connection Error: Failed to reach backend on Raspberry Pi 5.');
+      setBuildState('unbuilt');
+      setStatusText('Demo Mode');
     }
   };
 
   const handleStart = async () => {
+    // ---- Demo Mode ----
+    if (!liveRef.current) {
+      const sim = getSim();
+      const err = sim.load(code);
+      if (err) {
+        setBuildErrors(err);
+        setBuildState('failed');
+        return;
+      }
+      setIsDebugging(true);
+      setIsHalted(false);
+      setHistory([]);
+      setSelectedStep(null);
+      setCurrentSnapshot(sim.snapshot());
+      setLastChanged([]);
+      setStatusText('Demo: Paused at first instruction');
+      setInfoBanner('Demo Mode: simulated AArch64 is paused at the entry point. Click Step Instruction to execute.');
+      return;
+    }
+
     try {
       const res = await fetch('/api/debug/start', { method: 'POST' });
       const data = await res.json();
@@ -271,11 +352,35 @@ export const App: React.FC = () => {
         alert(data.detail || 'Failed to start debugger. Make sure you assembled first.');
       }
     } catch (e: any) {
-      alert('Error starting debugger: ' + e.message);
+      switchToDemo('Error starting debugger: ' + e.message);
+      setIsDebugging(false);
     }
   };
 
   const handleStep = async () => {
+    // ---- Demo Mode ----
+    if (!liveRef.current) {
+      const sim = getSim();
+      try {
+        const event = sim.step();
+        setHistory(prev => [...prev, event]);
+        setCurrentSnapshot(event.snapshot_after);
+        setLastChanged(event.changed_registers);
+        setCurrentInstruction(event.instruction);
+        setCurrentAddress(event.address);
+        if (event.is_halted) {
+          setIsHalted(true);
+          setStatusText(`Demo: Program Halted (Exit Code: ${event.exit_code ?? 0})`);
+          setInfoBanner(`Demo execution complete: program exited with code ${event.exit_code ?? 0}.`);
+        } else {
+          setStatusText(`Demo: Step #${event.step_number} Completed`);
+        }
+      } catch (e: any) {
+        alert('Simulator: ' + e.message);
+      }
+      return;
+    }
+
     try {
       const res = await fetch('/api/debug/step', { method: 'POST' });
       const event: StepEvent = await res.json();
@@ -297,11 +402,28 @@ export const App: React.FC = () => {
         alert((event as any).detail || 'Step error');
       }
     } catch (e: any) {
-      alert('Error stepping instruction: ' + e.message);
+      switchToDemo('Error stepping instruction: ' + e.message);
     }
   };
 
   const handleRun = async () => {
+    // ---- Demo Mode: run until halt ----
+    if (!liveRef.current) {
+      const sim = getSim();
+      const events = sim.run();
+      if (events.length > 0) {
+        setHistory(prev => [...prev.slice(0, 400), ...events.slice(0, 400)]);
+        const last = events[events.length - 1];
+        setCurrentSnapshot(last.snapshot_after);
+        setCurrentInstruction(last.instruction);
+        setCurrentAddress(last.address);
+        setIsHalted(true);
+        setStatusText(`Demo: Program Halted (Exit Code: ${last.exit_code ?? 0})`);
+        setInfoBanner(`Demo execution complete: ${events.length} instructions executed, exit code ${last.exit_code ?? 0}.`);
+      }
+      return;
+    }
+
     try {
       const res = await fetch('/api/debug/continue', { method: 'POST' });
       const event: StepEvent = await res.json();
@@ -319,11 +441,18 @@ export const App: React.FC = () => {
         alert((event as any).detail || 'Run error');
       }
     } catch (e: any) {
-      alert('Error running program: ' + e.message);
+      switchToDemo('Error running program: ' + e.message);
     }
   };
 
   const handleStop = async () => {
+    if (!liveRef.current) {
+      getSim().reset();
+      setIsDebugging(false);
+      setIsHalted(false);
+      setStatusText('Stopped (Demo)');
+      return;
+    }
     try {
       await fetch('/api/debug/stop', { method: 'POST' });
       setIsDebugging(false);
@@ -331,10 +460,17 @@ export const App: React.FC = () => {
       setStatusText('Stopped');
     } catch (e) {
       console.error(e);
+      setIsDebugging(false);
+      setIsHalted(false);
+      setStatusText('Stopped');
     }
   };
 
   const handleToggleLed = async (state: number) => {
+    if (!liveRef.current) {
+      setInfoBanner('Demo Mode: hardware control (LED / LCD) needs a connected Raspberry Pi.');
+      return;
+    }
     try {
       const res = await fetch('/api/gpio/led', {
         method: 'POST',
@@ -380,9 +516,26 @@ export const App: React.FC = () => {
         </div>
 
         <div className="text-xs font-mono text-slate-600 flex items-center gap-3">
+          {/* Device connection badge */}
+          {deviceConnected === null ? (
+            <span className="flex items-center gap-1.5 bg-slate-100 border border-slate-200 px-2 py-1 rounded-lg">
+              <span className="w-2 h-2 rounded-full bg-slate-400 animate-pulse"></span>
+              Checking connection…
+            </span>
+          ) : deviceConnected ? (
+            <span className="flex items-center gap-1.5 bg-emerald-50 border border-emerald-300 px-2 py-1 rounded-lg text-emerald-800 font-semibold">
+              <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+              Connected to Pi
+            </span>
+          ) : (
+            <span className="flex items-center gap-1.5 bg-amber-50 border border-amber-300 px-2 py-1 rounded-lg text-amber-800 font-semibold">
+              <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
+              Demo Mode · No Device
+            </span>
+          )}
           <span>Target: <strong className="text-sky-700 bg-sky-50 px-1.5 py-0.5 rounded border border-sky-200">AArch64 Linux</strong></span>
           <span className="text-slate-300">|</span>
-          <span>Debugger: <strong className="text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-200">GDB/MI</strong></span>
+          <span>Debugger: <strong className="text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-200">{deviceConnected ? 'GDB/MI' : 'Simulated'}</strong></span>
         </div>
       </header>
 
@@ -399,6 +552,7 @@ export const App: React.FC = () => {
         isHalted={isHalted}
         statusText={statusText}
         ledState={ledState}
+        demoMode={deviceConnected === false}
       />
 
       {/* Informational Feedback Alert */}

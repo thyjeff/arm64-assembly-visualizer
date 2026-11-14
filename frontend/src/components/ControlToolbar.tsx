@@ -14,6 +14,7 @@ interface Props {
   isHalted: boolean;
   statusText: string;
   ledState: number;
+  demoMode?: boolean;
 }
 
 export const ControlToolbar: React.FC<Props> = ({
@@ -27,7 +28,8 @@ export const ControlToolbar: React.FC<Props> = ({
   isDebugging,
   isHalted,
   statusText,
-  ledState
+  ledState,
+  demoMode = false
 }) => {
   const isBuilding = buildState === 'building';
 
@@ -153,24 +155,32 @@ export const ControlToolbar: React.FC<Props> = ({
 
       {/* Hardware & Session Status */}
       <div className="flex items-center gap-3">
-        {/* Physical LED Status & Manual Toggle */}
-        <div className={`flex items-center gap-2 px-3 py-1 rounded-lg border text-xs font-mono transition-all ${
-          ledState
-            ? 'bg-amber-50 border-amber-300 text-amber-900'
-            : 'bg-slate-50 border-slate-200 text-slate-600'
-        }`}>
-          <span className="font-semibold text-slate-500">LED (BCM 17):</span>
+        {/* Physical LED Status & Manual Toggle (live hardware only) */}
+        <div
+          className={`flex items-center gap-2 px-3 py-1 rounded-lg border text-xs font-mono transition-all ${
+            demoMode
+              ? 'bg-slate-50 border-slate-200 text-slate-400 opacity-60'
+              : ledState
+              ? 'bg-amber-50 border-amber-300 text-amber-900'
+              : 'bg-slate-50 border-slate-200 text-slate-600'
+          }`}
+          title={demoMode ? 'Demo Mode: no hardware connected' : 'External LED on BCM GPIO 17'}
+        >
+          <span className="font-semibold">LED (BCM 17):</span>
           <button
             onClick={() => onToggleLed(ledState ? 0 : 1)}
+            disabled={demoMode}
             className={`w-3.5 h-3.5 rounded-full border transition-all ${
-              ledState
+              demoMode
+                ? 'bg-slate-200 border-slate-300 cursor-not-allowed'
+                : ledState
                 ? 'bg-amber-400 border-amber-500 shadow-sm shadow-amber-400'
                 : 'bg-slate-300 border-slate-400 hover:bg-slate-400'
             }`}
-            title="Click to toggle LED manually"
+            title={demoMode ? 'Disabled in Demo Mode (no hardware)' : 'Click to toggle LED manually'}
           />
-          <span className={ledState ? 'text-amber-800 font-bold' : 'text-slate-500'}>
-            {ledState ? 'ON' : 'OFF'}
+          <span className={ledState && !demoMode ? 'text-amber-800 font-bold' : 'text-slate-500'}>
+            {demoMode ? 'N/A' : ledState ? 'ON' : 'OFF'}
           </span>
         </div>
 
