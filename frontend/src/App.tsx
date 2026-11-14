@@ -1,0 +1,479 @@
+import React, { useState, useEffect } from 'react';
+import { RegisterViewer } from './components/RegisterViewer';
+import { AssemblyEditor } from './components/AssemblyEditor';
+import { ControlToolbar, BuildState } from './components/ControlToolbar';
+import { AluVisualizer } from './components/AluVisualizer';
+import { ExecutionTimeline } from './components/ExecutionTimeline';
+import { RegisterSnapshot, StepEvent, RegisterDiff } from './types/debugger';
+
+const SAMPLE_ARITHMETIC = `// 01_arithmetic.s - Native AArch64 Arithmetic Demonstration
+.global _start
+.text
+
+_start:
+    // Step 1: Load 10 into X0
+    mov     x0, #10
+
+    // Step 2: Load 20 into X1
+    mov     x1, #20
+
+    // Step 3: Add X0 and X1, store result (30) in X2
+    add     x2, x0, x1
+
+    // Step 4: Copy X2 into X3. Notice X2 retains 30, and X3 becomes 30.
+    mov     x3, x2
+
+    // Step 5: Subtract X0 (10) from X2 (30), store in X4
+    sub     x4, x2, x0
+
+    // Step 6: Multiply X0 (10) and X1 (20), store in X5
+    mul     x5, x0, x1
+
+    // Step 7: Compare X2 and X3 (both 30) -> sets Zero & Carry flags
+    cmp     x2, x3
+
+    // Clean exit via Linux AArch64 syscall 93
+    mov     x8, #93
+    mov     x0, #0
+    svc     #0
+`;
+
+const SAMPLE_FILE_CREATION = `// 04_create_file.s - Linux Syscalls: Create & Write Text File on Pi 5
+.global _start
+
+.data
+filename:
+    .asciz  "output_demo.txt"
+
+message:
+    .ascii  "Hello from Raspberry Pi 5 native AArch64 assembly!\\nCreated via Linux Syscalls.\\n"
+msg_end:
+    .equ    msg_len, msg_end - message
+
+.text
+_start:
+    // 1. sys_openat (Syscall 56) to create output_demo.txt
+    mov     x0, #-100           // AT_FDCWD (relative to current directory)
+    ldr     x1, =filename       // Pointer to filename string
+    mov     x2, #0x241          // O_WRONLY | O_CREAT | O_TRUNC
+    mov     x3, #0x1a4          // Permissions 0644 (rw-r--r--)
+    mov     x8, #56             // Syscall 56: openat
+    svc     #0                  // Kernel returns file descriptor (fd) in X0
+
+    mov     x19, x0             // Save fd in X19
+
+    // 2. sys_write (Syscall 64) to write text to file
+    mov     x0, x19             // File descriptor in X0
+    ldr     x1, =message        // Buffer pointer in X1
+    mov     x2, #msg_len        // Byte count in X2
+    mov     x8, #64             // Syscall 64: write
+    svc     #0                  // Kernel returns bytes written in X0
+
+    // 3. sys_close (Syscall 57)
+    mov     x0, x19             // File descriptor in X0
+    mov     x8, #57             // Syscall 57: close
+    svc     #0
+
+    // 4. sys_exit (Syscall 93)
+    mov     x0, #0
+    mov     x8, #93
+    svc     #0
+`;
+
+const SAMPLE_GPIO = `// 03_gpio_led.s - AArch64 GPIO Control Demonstration
+// Calls documented C helper: void led_set(int state);
+.global main
+.type main, %function
+
+main:
+    // Function prologue: save FP (x29) and LR (x30)
+    stp     x29, x30, [sp, #-16]!
+    mov     x29, sp
+
+    // 1. Turn LED ON
+    mov     x0, #1
+    bl      led_set
+
+    // 2. Wait 1 second (1,000,000 microseconds)
+    ldr     x0, =1000000
+    bl      usleep
+
+    // 3. Turn LED OFF
+    mov     x0, #0
+    bl      led_set
+
+    // 4. Wait 1 second
+    ldr     x0, =1000000
+    bl      usleep
+
+    // Function epilogue: restore FP and LR, return
+    mov     x0, #0
+    ldp     x29, x30, [sp], #16
+    ret
+`;
+
+const SAMPLE_LCD = `// 05_i2c_lcd_hello.s - Print "Hello World!" on 16x2 I2C LCD from ARM64 Assembly
+.global main
+.type main, %function
+
+.data
+greeting:
+    .asciz  "Hello World!"
+
+.text
+main:
+    // Function prologue: save Frame Pointer (x29) and Link Register (x30)
+    stp     x29, x30, [sp, #-16]!
+    mov     x29, sp
+
+    // Pass string address in register X0 (AArch64 AAPCS calling convention)
+    ldr     x0, =greeting
+
+    // Call LCD driver helper: void lcd_print(const char *str);
+    bl      lcd_print
+
+    // Return cleanly
+    mov     x0, #0
+    ldp     x29, x30, [sp], #16
+    ret
+`;
+
+export const App: React.FC = () => {
+  const [activePreset, setActivePreset] = useState<string>('arithmetic');
+  const [code, setCode] = useState<string>(SAMPLE_ARITHMETIC);
+  const [lastBuiltCode, setLastBuiltCode] = useState<string>('');
+  const [buildState, setBuildState] = useState<BuildState>('unbuilt');
+  const [isDebugging, setIsDebugging] = useState(false);
+  const [isHalted, setIsHalted] = useState(false);
+  const [statusText, setStatusText] = useState('Idle');
+  const [ledState, setLedState] = useState(0);
+
+  const [currentSnapshot, setCurrentSnapshot] = useState<RegisterSnapshot | undefined>();
+  const [lastChanged, setLastChanged] = useState<RegisterDiff[]>([]);
+  const [history, setHistory] = useState<StepEvent[]>([]);
+  const [selectedStep, setSelectedStep] = useState<number | null>(null);
+  const [currentInstruction, setCurrentInstruction] = useState<string>('');
+  const [currentAddress, setCurrentAddress] = useState<string>('');
+  const [buildErrors, setBuildErrors] = useState<string | null>(null);
+  const [infoBanner, setInfoBanner] = useState<string | null>(null);
+
+  const handleCodeChange = (newCode: string) => {
+    setCode(newCode);
+    if ((buildState === 'done' || buildState === 'already_done') && newCode !== lastBuiltCode) {
+      setBuildState('modified');
+      setInfoBanner('Code modified. Click Re-Assemble & Link to compile your changes.');
+    }
+  };
+
+  const handleSelectPreset = (presetKey: string) => {
+    setActivePreset(presetKey);
+    let newCode = SAMPLE_ARITHMETIC;
+    if (presetKey === 'arithmetic') newCode = SAMPLE_ARITHMETIC;
+    else if (presetKey === 'file') newCode = SAMPLE_FILE_CREATION;
+    else if (presetKey === 'gpio') newCode = SAMPLE_GPIO;
+    else if (presetKey === 'lcd') newCode = SAMPLE_LCD;
+    setCode(newCode);
+    setBuildState('unbuilt');
+    setLastBuiltCode('');
+    setInfoBanner(null);
+    handleStop();
+  };
+
+  // WebSocket for real-time synchronization
+  useEffect(() => {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws/session`;
+    let ws: WebSocket | null = null;
+
+    try {
+      ws = new WebSocket(wsUrl);
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'step_event') {
+            const stepEvt: StepEvent = msg.data;
+            setCurrentSnapshot(stepEvt.snapshot_after);
+            setLastChanged(stepEvt.changed_registers);
+            setCurrentInstruction(stepEvt.instruction);
+            setCurrentAddress(stepEvt.address);
+            if (stepEvt.is_halted) {
+              setIsHalted(true);
+              setStatusText(`Process Halted (Exit Code: ${stepEvt.exit_code ?? 0})`);
+            }
+          }
+        } catch (e) {
+          console.error('WS parse error:', e);
+        }
+      };
+    } catch (e) {
+      console.warn('WS connection failed, falling back to REST:', e);
+    }
+
+    return () => {
+      if (ws) ws.close();
+    };
+  }, []);
+
+  const handleBuild = async () => {
+    // If the code has not changed since last successful build, notify user it's already done
+    if (code === lastBuiltCode && (buildState === 'done' || buildState === 'already_done')) {
+      setBuildState('already_done');
+      setInfoBanner('Already Done: Machine code is already assembled and up to date. You can directly click 2. Start Debugger!');
+      setStatusText('Already Built & Linked');
+      return;
+    }
+
+    setBuildState('building');
+    setBuildErrors(null);
+    setInfoBanner('Assembling & Linking: Generating native AArch64 ELF binary on Raspberry Pi 5...');
+    setStatusText('Assembling...');
+
+    try {
+      const res = await fetch('/api/build', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assembly_code: code, target_type: 'standalone' })
+      });
+      const data = await res.json();
+      if (!data.success) {
+        setBuildErrors(data.errors || 'Build failed');
+        setBuildState('failed');
+        setInfoBanner('Build Failed: Please review the assembler error diagnostics below.');
+        setStatusText('Build Failed');
+      } else {
+        setLastBuiltCode(code);
+        setBuildState('done');
+        setInfoBanner('Done! Executable ELF binary built successfully on Pi 5. Click 2. Start Debugger to inspect execution.');
+        setStatusText('Built & Linked (Done)');
+      }
+    } catch (e: any) {
+      setBuildErrors(e.message);
+      setBuildState('failed');
+      setInfoBanner('Connection Error: Failed to reach backend on Raspberry Pi 5.');
+      setStatusText('Build Error');
+    }
+  };
+
+  const handleStart = async () => {
+    try {
+      const res = await fetch('/api/debug/start', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok) {
+        setIsDebugging(true);
+        setIsHalted(false);
+        setHistory([]);
+        setSelectedStep(null);
+        setCurrentSnapshot(data.snapshot);
+        setLastChanged([]);
+        setStatusText('Debugging (Paused at _start / main)');
+        setInfoBanner('Debugger Running: Stopped at entry point. Click Step Instruction (or press F10) to execute one by one.');
+      } else {
+        alert(data.detail || 'Failed to start debugger. Make sure you assembled first.');
+      }
+    } catch (e: any) {
+      alert('Error starting debugger: ' + e.message);
+    }
+  };
+
+  const handleStep = async () => {
+    try {
+      const res = await fetch('/api/debug/step', { method: 'POST' });
+      const event: StepEvent = await res.json();
+      if (res.ok) {
+        setHistory(prev => [...prev, event]);
+        setCurrentSnapshot(event.snapshot_after);
+        setLastChanged(event.changed_registers);
+        setCurrentInstruction(event.instruction);
+        setCurrentAddress(event.address);
+
+        if (event.is_halted) {
+          setIsHalted(true);
+          setStatusText(`Process Halted (Exit Code: ${event.exit_code ?? 0})`);
+          setInfoBanner(`Execution complete: Child process exited cleanly with code ${event.exit_code ?? 0}.`);
+        } else {
+          setStatusText(`Step #${event.step_number} Completed`);
+        }
+      } else {
+        alert((event as any).detail || 'Step error');
+      }
+    } catch (e: any) {
+      alert('Error stepping instruction: ' + e.message);
+    }
+  };
+
+  const handleRun = async () => {
+    try {
+      const res = await fetch('/api/debug/continue', { method: 'POST' });
+      const event: StepEvent = await res.json();
+      if (res.ok) {
+        setHistory(prev => [...prev, event]);
+        setCurrentSnapshot(event.snapshot_after);
+        if (event.is_halted) {
+          setIsHalted(true);
+          setStatusText(`Process Halted (Exit Code: ${event.exit_code ?? 0})`);
+          setInfoBanner(`Execution complete: program ran to completion (exit code ${event.exit_code ?? 0}). Check the LCD output!`);
+        } else {
+          setStatusText('Running / Stopped');
+        }
+      } else {
+        alert((event as any).detail || 'Run error');
+      }
+    } catch (e: any) {
+      alert('Error running program: ' + e.message);
+    }
+  };
+
+  const handleStop = async () => {
+    try {
+      await fetch('/api/debug/stop', { method: 'POST' });
+      setIsDebugging(false);
+      setIsHalted(false);
+      setStatusText('Stopped');
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleToggleLed = async (state: number) => {
+    try {
+      const res = await fetch('/api/gpio/led', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ state })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setLedState(state);
+      }
+    } catch (e) {
+      console.error('Error toggling LED:', e);
+    }
+  };
+
+  const handleSelectStep = (stepNumber: number) => {
+    setSelectedStep(stepNumber);
+    const evt = history.find(h => h.step_number === stepNumber);
+    if (evt) {
+      setCurrentSnapshot(evt.snapshot_after);
+      setLastChanged(evt.changed_registers);
+    }
+  };
+
+  const latestEvent = history.length > 0 ? history[history.length - 1] : undefined;
+  const displayEvent = selectedStep !== null
+    ? history.find(h => h.step_number === selectedStep)
+    : latestEvent;
+
+  return (
+    <div className="flex flex-col h-screen bg-slate-50 text-slate-800 p-3 gap-3">
+      {/* Top Header */}
+      <header className="flex items-center justify-between px-4 py-2.5 bg-white border border-slate-200 rounded-xl shadow-xs">
+        <div className="flex items-center gap-3">
+          <div>
+            <h1 className="text-sm font-bold tracking-wide text-slate-900 leading-tight">
+              ARM64 Architecture Visualizer
+            </h1>
+            <p className="text-[11px] text-slate-500 font-normal">
+              Raspberry Pi 5 (AArch64) + Arduino + Native GDB/MI Instruction Stepper
+            </p>
+          </div>
+        </div>
+
+        <div className="text-xs font-mono text-slate-600 flex items-center gap-3">
+          <span>Target: <strong className="text-sky-700 bg-sky-50 px-1.5 py-0.5 rounded border border-sky-200">AArch64 Linux</strong></span>
+          <span className="text-slate-300">|</span>
+          <span>Debugger: <strong className="text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-200">GDB/MI</strong></span>
+        </div>
+      </header>
+
+      {/* Control Toolbar */}
+      <ControlToolbar
+        onBuild={handleBuild}
+        onStart={handleStart}
+        onStep={handleStep}
+        onRun={handleRun}
+        onStop={handleStop}
+        onToggleLed={handleToggleLed}
+        buildState={buildState}
+        isDebugging={isDebugging}
+        isHalted={isHalted}
+        statusText={statusText}
+        ledState={ledState}
+      />
+
+      {/* Informational Feedback Alert */}
+      {infoBanner && !buildErrors && (
+        <div className={`px-3 py-2 rounded-xl text-xs font-medium flex items-center justify-between transition-all border ${
+          buildState === 'done' || buildState === 'already_done'
+            ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+            : buildState === 'building'
+            ? 'bg-sky-50 text-sky-800 border-sky-300'
+            : buildState === 'modified'
+            ? 'bg-amber-50 text-amber-800 border-amber-300'
+            : 'bg-slate-100 text-slate-700 border-slate-200'
+        }`}>
+          <div className="flex items-center gap-2">
+            {buildState === 'building' && (
+              <svg className="animate-spin h-3.5 w-3.5 text-sky-600" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+            )}
+            <span>{infoBanner}</span>
+          </div>
+          <button
+            onClick={() => setInfoBanner(null)}
+            className="text-[10px] text-slate-400 hover:text-slate-700 font-bold px-1"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* Error banner if build failed */}
+      {buildErrors && (
+        <div className="bg-rose-50 border border-rose-300 p-3 rounded-xl text-rose-800 text-xs font-mono whitespace-pre-wrap shadow-xs">
+          <strong>Build Diagnostics:</strong>
+          <div className="mt-1">{buildErrors}</div>
+        </div>
+      )}
+
+      {/* Main Grid: Left = Assembly & Timeline, Right = Registers & ALU */}
+      <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-3 overflow-hidden">
+        {/* Left Column: Code Editor & Timeline */}
+        <div className="lg:col-span-6 flex flex-col gap-3 h-full overflow-hidden">
+          <div className="flex-1 min-h-0">
+            <AssemblyEditor
+              code={code}
+              onChange={handleCodeChange}
+              currentAddress={currentAddress}
+              currentInstruction={currentInstruction}
+              onSelectPreset={handleSelectPreset}
+              activePreset={activePreset}
+            />
+          </div>
+          <div className="h-48 min-h-48">
+            <ExecutionTimeline
+              history={history}
+              selectedStep={selectedStep}
+              onSelectStep={handleSelectStep}
+            />
+          </div>
+        </div>
+
+        {/* Right Column: Registers & ALU Breakdown */}
+        <div className="lg:col-span-6 flex flex-col gap-3 h-full overflow-hidden">
+          <div className="flex-1 min-h-0">
+            <RegisterViewer
+              snapshot={currentSnapshot}
+              changedRegisters={lastChanged}
+            />
+          </div>
+          <div className="h-44 min-h-44">
+            <AluVisualizer lastEvent={displayEvent} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};

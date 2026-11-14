@@ -1,0 +1,15 @@
+[Unit]
+Description=ARM64 Assembly Visualizer Service
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/arm64_visualizer
+ExecStart=/home/pi/arm64_visualizer/venv/bin/python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --app-dir /home/pi/arm64_visualizer/backend
+Restart=always
+RestartSec=3
+KillSignal=SIGINT
+
+[Install]
+WantedBy=multi-user.target
