@@ -131,7 +131,7 @@ All SSH scripts read credentials from **environment variables** — nothing is h
 ```bash
 export PI_HOST=169.254.100.2     # your Pi's address
 export PI_USER=pi
-export PI_PASSWORD=********      # keep out of the repo!
+export PI_PASSWORD=*             # your password
 
 python scripts/pi_preflight.py   # Milestone 0 environment check
 python scripts/verify_all.py     # full-system verification suite
