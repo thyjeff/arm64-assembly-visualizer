@@ -4,8 +4,10 @@ import { AssemblyEditor } from './components/AssemblyEditor';
 import { ControlToolbar, BuildState } from './components/ControlToolbar';
 import { AluVisualizer } from './components/AluVisualizer';
 import { ExecutionTimeline } from './components/ExecutionTimeline';
+import { ConnectDeviceDialog } from './components/ConnectDeviceDialog';
 import { RegisterSnapshot, StepEvent, RegisterDiff } from './types/debugger';
 import { AArch64Simulator } from './simulator/aarch64';
+import { getApiBase, setApiBase, fullUrl, wsUrlFor, probeBackend, DeviceHealth } from './api';
 
 const SAMPLE_ARITHMETIC = `// 01_arithmetic.s - Native AArch64 Arithmetic Demonstration
 .global _start
@@ -160,9 +162,12 @@ export const App: React.FC = () => {
 
   // ---- Device connection / Demo Mode ----
   // deviceConnected === null  -> still checking
-  // deviceConnected === true  -> live Raspberry Pi backend reachable
+  // deviceConnected === true  -> live backend reachable (same-origin or remote URL)
   // deviceConnected === false -> Demo Mode (browser simulator)
   const [deviceConnected, setDeviceConnected] = useState<boolean | null>(null);
+  const [deviceInfo, setDeviceInfo] = useState<DeviceHealth | null>(null);
+  const [apiBase, setApiBaseState] = useState<string>('');
+  const [connectDialogOpen, setConnectDialogOpen] = useState(false);
   const liveRef = useRef(false);
   const simulatorRef = useRef<AArch64Simulator | null>(null);
 
@@ -170,6 +175,9 @@ export const App: React.FC = () => {
     liveRef.current = v;
     setDeviceConnected(v);
   };
+
+  /** All HTTP calls go through here so a remote backend URL works too. */
+  const api = (path: string): string => fullUrl(apiBase, path);
 
   const switchToDemo = (reason: string) => {
     if (!liveRef.current) return;
@@ -182,16 +190,27 @@ export const App: React.FC = () => {
     return simulatorRef.current;
   };
 
-  // Probe the backend once on load (and whenever the page regains focus)
+  // Probe for a backend: saved URL first, then same-origin, else Demo Mode
   useEffect(() => {
     const probe = async () => {
-      try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 2500);
-        const res = await fetch('/api/health', { signal: controller.signal });
-        clearTimeout(timer);
-        setLive(res.ok);
-      } catch {
+      const saved = getApiBase();
+      if (saved) {
+        const info = await probeBackend(saved);
+        if (info) {
+          setApiBaseState(saved);
+          setDeviceInfo(info);
+          setLive(true);
+          return;
+        }
+        setApiBase(''); // saved target is gone - fall back to probing
+        setApiBaseState('');
+      }
+      const local = await probeBackend('');
+      if (local) {
+        setDeviceInfo(local);
+        setLive(true);
+      } else {
+        setDeviceInfo(null);
         setLive(false);
       }
     };
@@ -199,6 +218,33 @@ export const App: React.FC = () => {
     window.addEventListener('focus', probe);
     return () => window.removeEventListener('focus', probe);
   }, []);
+
+  const handleConnect = async (url: string): Promise<string | null> => {
+    const clean = url.replace(/\/+$/, '');
+    const info = await probeBackend(clean, 3000);
+    if (!info) {
+      return `No backend responded at ${clean} within 3 seconds.`;
+    }
+    setApiBase(clean);
+    setApiBaseState(clean);
+    setDeviceInfo(info);
+    setLive(true);
+    setIsDebugging(false);
+    setIsHalted(false);
+    setInfoBanner(`Connected to ${info.hostname || 'device'} (${info.arch || '?'}) at ${clean}`);
+    return null;
+  };
+
+  const handleDisconnect = () => {
+    setApiBase('');
+    setApiBaseState('');
+    setDeviceInfo(null);
+    setLive(false);
+    setIsDebugging(false);
+    setIsHalted(false);
+    setStatusText('Stopped');
+    setInfoBanner('Disconnected. Running in Demo Mode with the built-in simulator.');
+  };
 
   const handleCodeChange = (newCode: string) => {
     setCode(newCode);
@@ -225,8 +271,7 @@ export const App: React.FC = () => {
   // WebSocket for real-time synchronization (live mode only)
   useEffect(() => {
     if (deviceConnected !== true) return;
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws/session`;
+    const wsUrl = wsUrlFor(apiBase, '/ws/session');
     let ws: WebSocket | null = null;
 
     try {
@@ -256,7 +301,7 @@ export const App: React.FC = () => {
     return () => {
       if (ws) ws.close();
     };
-  }, []);
+  }, [deviceConnected, apiBase]);
 
   const handleBuild = async () => {
     // If the code has not changed since last successful build, notify user it's already done
@@ -291,7 +336,7 @@ export const App: React.FC = () => {
     setInfoBanner('Assembling & Linking: Generating native AArch64 ELF binary on Raspberry Pi 5...');
 
     try {
-      const res = await fetch('/api/build', {
+      const res = await fetch(api('/api/build'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ assembly_code: code, target_type: 'standalone' })
@@ -337,7 +382,7 @@ export const App: React.FC = () => {
     }
 
     try {
-      const res = await fetch('/api/debug/start', { method: 'POST' });
+      const res = await fetch(api('/api/debug/start'), { method: 'POST' });
       const data = await res.json();
       if (res.ok) {
         setIsDebugging(true);
@@ -382,7 +427,7 @@ export const App: React.FC = () => {
     }
 
     try {
-      const res = await fetch('/api/debug/step', { method: 'POST' });
+      const res = await fetch(api('/api/debug/step'), { method: 'POST' });
       const event: StepEvent = await res.json();
       if (res.ok) {
         setHistory(prev => [...prev, event]);
@@ -425,7 +470,7 @@ export const App: React.FC = () => {
     }
 
     try {
-      const res = await fetch('/api/debug/continue', { method: 'POST' });
+      const res = await fetch(api('/api/debug/continue'), { method: 'POST' });
       const event: StepEvent = await res.json();
       if (res.ok) {
         setHistory(prev => [...prev, event]);
@@ -454,7 +499,7 @@ export const App: React.FC = () => {
       return;
     }
     try {
-      await fetch('/api/debug/stop', { method: 'POST' });
+      await fetch(api('/api/debug/stop'), { method: 'POST' });
       setIsDebugging(false);
       setIsHalted(false);
       setStatusText('Stopped');
@@ -472,7 +517,7 @@ export const App: React.FC = () => {
       return;
     }
     try {
-      const res = await fetch('/api/gpio/led', {
+      const res = await fetch(api('/api/gpio/led'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ state })
@@ -516,23 +561,31 @@ export const App: React.FC = () => {
         </div>
 
         <div className="text-xs font-mono text-slate-600 flex items-center gap-3">
-          {/* Device connection badge */}
-          {deviceConnected === null ? (
-            <span className="flex items-center gap-1.5 bg-slate-100 border border-slate-200 px-2 py-1 rounded-lg">
-              <span className="w-2 h-2 rounded-full bg-slate-400 animate-pulse"></span>
-              Checking connection…
-            </span>
-          ) : deviceConnected ? (
-            <span className="flex items-center gap-1.5 bg-emerald-50 border border-emerald-300 px-2 py-1 rounded-lg text-emerald-800 font-semibold">
-              <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-              Connected to Pi
-            </span>
-          ) : (
-            <span className="flex items-center gap-1.5 bg-amber-50 border border-amber-300 px-2 py-1 rounded-lg text-amber-800 font-semibold">
-              <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
-              Demo Mode · No Device
-            </span>
-          )}
+          {/* Device connection badge / Connect Device button */}
+          <button
+            onClick={() => setConnectDialogOpen(true)}
+            title="Click to connect a device backend or disconnect"
+            className={`flex items-center gap-1.5 px-2 py-1 rounded-lg border font-semibold transition-all ${
+              deviceConnected === null
+                ? 'bg-slate-100 border-slate-200 text-slate-500'
+                : deviceConnected
+                ? 'bg-emerald-50 border-emerald-300 text-emerald-800 hover:bg-emerald-100'
+                : 'bg-amber-50 border-amber-300 text-amber-800 hover:bg-amber-100'
+            }`}
+          >
+            <span className={`w-2 h-2 rounded-full ${
+              deviceConnected === null
+                ? 'bg-slate-400 animate-pulse'
+                : deviceConnected
+                ? 'bg-emerald-500'
+                : 'bg-amber-500 animate-pulse'
+            }`}></span>
+            {deviceConnected === null
+              ? 'Checking connection…'
+              : deviceConnected
+              ? `Connected: ${deviceInfo?.hostname || 'device'} (${deviceInfo?.arch || '?'})`
+              : 'Demo Mode · No Device — Connect'}
+          </button>
           <span>Target: <strong className="text-sky-700 bg-sky-50 px-1.5 py-0.5 rounded border border-sky-200">AArch64 Linux</strong></span>
           <span className="text-slate-300">|</span>
           <span>Debugger: <strong className="text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-200">{deviceConnected ? 'GDB/MI' : 'Simulated'}</strong></span>
@@ -628,6 +681,17 @@ export const App: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Connect Device dialog */}
+      <ConnectDeviceDialog
+        open={connectDialogOpen}
+        onClose={() => setConnectDialogOpen(false)}
+        onConnect={handleConnect}
+        onDisconnect={handleDisconnect}
+        connected={deviceConnected === true}
+        currentUrl={apiBase}
+        deviceInfo={deviceInfo}
+      />
     </div>
   );
 };

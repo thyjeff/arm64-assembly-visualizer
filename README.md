@@ -16,6 +16,26 @@ The header badge always shows the connection state:
 
 This makes the project presentable on any laptop — no Pi required for classroom demonstrations.
 
+## Connecting Devices
+
+Click the header badge to open the **Connect Device** dialog:
+
+- **Connected mode** — enter the device's backend URL (e.g. `http://169.254.100.2:8000`), and the portal probes `/api/health`, then drives that device's assembler, GDB and hardware. The badge shows the target's hostname and architecture (e.g. `Connected: pi (aarch64)`).
+- **Same-origin** — if you open the portal on the device itself (`http://localhost:8000/` on the Pi), it connects automatically with no configuration.
+- **Demo Mode** — click *Disconnect* at any time to return to the built-in simulator.
+
+### Setting up a new device
+
+Any AArch64 Linux board can become a target — on the device run:
+
+```bash
+git clone https://github.com/thyjeff/arm64-assembly-visualizer.git
+cd arm64-assembly-visualizer
+bash scripts/setup_arm_device.sh    # installs toolchain, venv, systemd service
+```
+
+The service auto-starts at boot; other browsers connect to `http://<device-ip>:8000/` through the Connect Device dialog.
+
 ```text
                     WEB BROWSER (React + TypeScript)
        +--------------------------------------------------+

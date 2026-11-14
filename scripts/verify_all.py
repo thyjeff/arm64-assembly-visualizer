@@ -31,9 +31,14 @@ check("Portal serves web UI", r.status_code == 200 and "text/html" in r.headers.
 r = requests.get(f"{base}/api/health", timeout=5)
 check("API health endpoint", r.status_code == 200 and r.json().get("status") == "online")
 
-# ============ 3. ARDUINO LCD ============
+# ============ 3. ARDUINO LCD (only when the hardware is attached) ============
+_, so, _ = ssh.exec_command("ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null | head -n 1")
+arduino_tty = so.read().decode().strip()
 r = requests.post(f"{base}/api/lcd/test", timeout=5)
-check("Arduino LCD round-trip (PING/PONG)", r.json().get("pong_received") is True, r.json().get("reply"))
+if arduino_tty:
+    check("Arduino LCD round-trip (PING/PONG)", r.json().get("pong_received") is True, r.json().get("reply"))
+else:
+    print("[SKIP] Arduino LCD round-trip - no Arduino attached (optional hardware)")
 
 # ============ 4. FULL DEBUG WORKFLOW (Arithmetic) ============
 code = """
@@ -115,20 +120,23 @@ ev = r.json()
 check("Run to Completion (exit 0)", ev.get("is_halted") is True and ev.get("exit_code") == 0, "exit=" + str(ev.get("exit_code")))
 
 time.sleep(0.5)
-stdin, stdout, stderr = ssh.exec_command(
-    'journalctl -u arm64-visualizer.service --since "1 minute ago" --no-pager | grep "LCD SEND"'
-)
-lines = [l.split("[LCD SEND]")[-1].strip() for l in stdout.read().decode().splitlines() if "[LCD SEND]" in l]
-# Find the Hello World program's INST line; nothing but GPIO events may follow it
-try:
-    hw_idx = next(i for i, l in enumerate(lines) if l == "INST|Hello World!")
-    after = lines[hw_idx + 1:]
-    only_gpio = all(l.startswith("GPIO|") for l in after)
-    check("LCD shows ONLY 'Hello World!' after program run",
-          hw_idx >= 0 and only_gpio,
-          " -> ".join(lines[hw_idx:hw_idx + 2]))
-except StopIteration:
-    check("LCD shows ONLY 'Hello World!' after program run", False, "INST|Hello World! not found")
+if arduino_tty:
+    stdin, stdout, stderr = ssh.exec_command(
+        'journalctl -u arm64-visualizer.service --since "1 minute ago" --no-pager | grep "LCD SEND"'
+    )
+    lines = [l.split("[LCD SEND]")[-1].strip() for l in stdout.read().decode().splitlines() if "[LCD SEND]" in l]
+    # Find the Hello World program's INST line; nothing but GPIO events may follow it
+    try:
+        hw_idx = next(i for i, l in enumerate(lines) if l == "INST|Hello World!")
+        after = lines[hw_idx + 1:]
+        only_gpio = all(l.startswith("GPIO|") for l in after)
+        check("LCD shows ONLY 'Hello World!' after program run",
+              hw_idx >= 0 and only_gpio,
+              " -> ".join(lines[hw_idx:hw_idx + 2]))
+    except StopIteration:
+        check("LCD shows ONLY 'Hello World!' after program run", False, "INST|Hello World! not found")
+else:
+    print("[SKIP] LCD delivery check - no Arduino attached (optional hardware)")
 
 # ============ 6. GPIO LED ============
 # (Skipped: no LED is connected on this setup - LCD only.

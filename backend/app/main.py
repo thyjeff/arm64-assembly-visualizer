@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import platform
 import socket
 import threading
 from typing import List, Optional
@@ -96,7 +97,9 @@ def read_root():
     return {
         "project": "ARM64 Assembly Computer Architecture Visualizer",
         "target": "Raspberry Pi 5 + Arduino",
-        "status": "online"
+        "status": "online",
+        "hostname": socket.gethostname(),
+        "arch": platform.machine(),
     }
 
 @app.post("/api/build", response_model=BuildResponse)
